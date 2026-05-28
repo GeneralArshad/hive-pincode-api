@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import http from 'http';
 import { MongoClient, ObjectId } from 'mongodb';
 
 const app  = express();
@@ -23,6 +24,31 @@ async function connectDB() {
 
 // ── Health ──────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+
+// ── GET /api/pincode/:pin ────────────────────────────────────
+// Proxies India Post API over HTTP (their HTTPS cert is often expired).
+// Browsers cannot call it directly due to SSL errors; the backend can.
+app.get('/api/pincode/:pin', async (req, res) => {
+  const pin = req.params.pin;
+  if (!/^\d{6}$/.test(pin)) return res.status(400).json({ error: 'Invalid pincode' });
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const r = http.get(`http://api.postalpincode.in/pincode/${pin}`, resp => {
+        let body = '';
+        resp.on('data', chunk => body += chunk);
+        resp.on('end', () => {
+          try { resolve(JSON.parse(body)); }
+          catch (e) { reject(new Error('Bad JSON from India Post')); }
+        });
+      });
+      r.on('error', reject);
+      r.setTimeout(8000, () => { r.destroy(); reject(new Error('Timeout')); });
+    });
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: 'pincode_lookup_failed', detail: err.message });
+  }
+});
 
 // ── GET /api/stats ──────────────────────────────────────────
 app.get('/api/stats', async (_, res) => {
